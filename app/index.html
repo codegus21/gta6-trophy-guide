@@ -3,23 +3,92 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GTA VI trophy checklist</title>
+<title>Leonida Trophy Guide — GTA VI PS5 trophies</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>GTA VI trophy checklist</h1>
-  <p id="progress">0 of 55 earned</p>
+<header class="masthead">
+  <p class="kicker">Grand Theft Auto VI · PlayStation 5</p>
+  <h1>Leonida Trophy Guide</h1>
+  <p class="lede">Every one of the 55 official trophies, with a guide to each, a roadmap to the platinum, and a tracker that keeps your progress in this browser. Works offline — nothing here reaches the network.</p>
+  <div class="progress" id="progress" aria-live="polite">
+    <p class="progress-line"><strong id="earned-count">0 of 55 earned</strong> <span id="earned-pct">0%</span></p>
+    <div class="bar" role="progressbar" aria-label="Progress towards the platinum" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-bar"><span id="progress-fill"></span></div>
+    <p class="grades" id="grade-counts"></p>
+    <p class="towards" id="towards-platinum"></p>
+  </div>
 </header>
-<div class="controls">
-  <label>Grade <select id="grade"><option value="all">All</option><option value="platinum">Platinum</option><option value="gold">Gold</option><option value="silver">Silver</option><option value="bronze">Bronze</option></select></label>
-  <button id="export" type="button">Export progress</button>
-  <label class="import">Import progress <input id="import" type="file" accept="application/json"></label>
-</div>
-<table>
-  <thead><tr><th>Earned</th><th>Trophy</th><th>Grade</th><th>How to get it</th></tr></thead>
-  <tbody id="rows"></tbody>
-</table>
-<script type="module" src="app.js"></script>
+
+<main>
+  <section class="panel controls" aria-label="Tracker controls">
+    <div class="control-row">
+      <label class="grow">Search trophies
+        <input id="search" type="search" placeholder="Name or description…" autocomplete="off">
+      </label>
+      <label>Kind
+        <select id="kind">
+          <option value="all">All kinds</option>
+          <option value="story">Story</option>
+          <option value="missable">Missable</option>
+          <option value="collectibles">Collectibles</option>
+          <option value="activities">Activities</option>
+          <option value="online">Online</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+      <label>Grade
+        <select id="grade">
+          <option value="all">All grades</option>
+          <option value="platinum">Platinum</option>
+          <option value="gold">Gold</option>
+          <option value="silver">Silver</option>
+          <option value="bronze">Bronze</option>
+        </select>
+      </label>
+      <label>Status
+        <select id="status">
+          <option value="all">Earned and not yet</option>
+          <option value="earned">Earned</option>
+          <option value="missing">Not yet earned</option>
+        </select>
+      </label>
+    </div>
+    <div class="control-row">
+      <label class="check"><input id="spoiler" type="checkbox"> Hide story spoilers <span class="hint">names and descriptions of story trophies stay hidden until earned</span></label>
+    </div>
+    <div class="control-row">
+      <button id="export" type="button">Export progress</button>
+      <label class="import-btn">Import progress <input id="import" type="file" accept="application/json,.json"></label>
+      <button id="reset" type="button" class="quiet">Reset progress</button>
+      <span class="status" id="file-status" role="status"></span>
+    </div>
+    <p class="count" id="shown-count"></p>
+  </section>
+
+  <section class="panel" aria-label="Roadmap to the platinum">
+    <h2>Roadmap to the platinum</h2>
+    <p class="section-note">The order to earn them in, built from the official trophy descriptions. Story first, then activities, then collectibles, then cleanup. The platinum unlocks when the other 54 are earned.</p>
+    <ol class="roadmap" id="roadmap"></ol>
+    <p class="section-note" id="roadmap-note"></p>
+  </section>
+
+  <section aria-label="Trophy checklist">
+    <h2 class="list-heading">Trophy checklist</h2>
+    <p class="section-note">Tick a trophy when you earn it — it stays ticked in this browser. Click a trophy for its guide and its sources. A trophy marked <span class="tag missable">Missable</span> can pass you by; read its guide before the moment comes.</p>
+    <div class="list" id="list"></div>
+    <p class="empty" id="empty" hidden>No trophies match these filters.</p>
+  </section>
+
+  <footer>
+    <p>Trophy names, descriptions and grades are the official PlayStation list, as published. Guides are written for this page in the maker's own words and cite their sources beside each trophy. This guide is not affiliated with, endorsed by, or connected to Rockstar Games or Sony Interactive Entertainment.</p>
+  </footer>
+</main>
+
+<dialog id="detail" class="detail">
+  <form method="dialog" class="detail-close"><button type="submit" aria-label="Close guide">Close ✕</button></form>
+  <div id="detail-body"></div>
+</dialog>
+
+<script src="app.js" defer></script>
 </body>
 </html>
