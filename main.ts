@@ -1,138 +1,162 @@
-// Leonida Trophy Guide — entry program (gta6-trophy-guide-01).
+// main.ts — hand the trophy guide in.
 //
-// Copies this repository's app/ and screenshots/ into the output directory
-// and writes output/dossier.json, the summary the judge reads, using the
-// vendored make.fun frontend library. The guide itself is plain static
-// files under app/ (index.html, style.css, app.js, data/*.json); it opens
-// in a desktop browser and works with the network off.
+// Copies app/ and screenshots/ from this repository into the output
+// directory and writes dossier.json there with buildDossier from the
+// vendored frontend library. The output directory is /output, or the
+// directory named by MAKEFUN_OUTPUT_DIR when that is set.
 //
-// Run it from the repository root:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-// In the grader's container MAKEFUN_OUTPUT_DIR is unset and the output
-// directory is /output.
-//
-// Only the Node standard library is used, plus vendor/makefun-frontend.ts,
-// which must stay exactly as the kit shipped it: the scorer rebuilds the
-// dossier with its own copy and requires byte-for-byte equality.
+// The output directory itself is never removed: on the grader it is a
+// mounted volume, and removing it fails. Only the three things this
+// program owns inside it — the app folder, the screenshots folder and
+// the dossier file — are cleared before each run.
 
 import {
-  copyFileSync,
-  existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-frontend.ts';
 
-// The repository root is the directory holding this file.
-const repoRoot = resolve(fileURLToPath(new URL('.', import.meta.url)));
-const outputDir = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
+const REPO_ROOT = dirname(fileURLToPath(import.meta.url));
+const OUTPUT_DIR = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
-const appSource = join(repoRoot, 'app');
-const shotsSource = join(repoRoot, 'screenshots');
+const APP_NAME = 'app';
+const SHOTS_NAME = 'screenshots';
+const DOSSIER_NAME = 'dossier.json';
+const INDEX_NAME = 'index.html';
+const TROPHIES_NAME = join('data', 'trophies.json');
+
+const TEXT_MAX_BYTES = 163840;
+const SHOTS_MAX = 4;
+const SHOT_MAX_BYTES = 262144;
+const APP_MAX_FILES = 993;
+const APP_MAX_BYTES = 48 * 1024 * 1024;
+const APP_PATH_MAX_BYTES = 1000;
 
 function fail(message: string): never {
   throw new Error(`main.ts: ${message}`);
 }
 
-function requireDirectory(path: string, label: string): void {
-  let info;
+function isFile(path: string): boolean {
   try {
-    info = statSync(path);
+    return statSync(path).isFile();
   } catch {
-    fail(`missing ${label} directory: ${path} does not exist; nothing was written`);
-  }
-  if (!info.isDirectory()) {
-    fail(`${label} is not a directory: ${path}; nothing was written`);
+    return false;
   }
 }
 
-// Copy one directory tree into another, entry by entry in sorted order so
-// the run is deterministic. Symbolic links and other special files are
-// refused: the entry must be plain files and directories only.
-function copyTree(source: string, target: string): { files: number; bytes: number } {
+function isDir(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** The screenshots that count: regular files whose names do not start with a dot. */
+function countShots(shotsDir: string): number {
+  if (!isDir(shotsDir)) return 0;
+  let n = 0;
+  for (const name of readdirSync(shotsDir)) {
+    if (name.startsWith('.')) continue;
+    if (isFile(join(shotsDir, name))) n += 1;
+  }
+  return n;
+}
+
+/** Check everything the run needs before writing anything. */
+function checkInputs(appDir: string, shotsDir: string): void {
+  if (!isDir(appDir)) fail(`missing app folder: ${appDir}`);
+  const indexPath = join(appDir, INDEX_NAME);
+  if (!isFile(indexPath)) fail(`missing app main page: ${indexPath}`);
+  if (statSync(indexPath).size > 1024 * 1024) {
+    fail(`app main page is over 1 MiB: ${indexPath}`);
+  }
+  if (!isFile(join(appDir, TROPHIES_NAME))) {
+    fail(`missing trophy data file: ${join(appDir, TROPHIES_NAME)}`);
+  }
+  const shots = countShots(shotsDir);
+  if (shots < 3 || shots > SHOTS_MAX) {
+    fail(
+      `screenshots folder must hold 3 or 4 files, found ${shots}: ${shotsDir}`,
+    );
+  }
+  for (const name of readdirSync(shotsDir).sort()) {
+    if (name.startsWith('.')) continue;
+    const shotPath = join(shotsDir, name);
+    if (isFile(shotPath) && statSync(shotPath).size > SHOT_MAX_BYTES) {
+      fail(`screenshot is over 256 KiB: ${shotPath}`);
+    }
+  }
+}
+
+/** Remove only the three things this program owns inside the output directory. */
+function clearOwned(outDir: string): void {
+  for (const name of [APP_NAME, SHOTS_NAME, DOSSIER_NAME]) {
+    const target = join(outDir, name);
+    rmSync(target, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Copy a tree in sorted order, refusing symbolic links and other special
+ * files. Returns how many files were copied.
+ */
+function copyTree(src: string, dst: string): number {
   let files = 0;
-  let bytes = 0;
-  mkdirSync(target, { recursive: true });
-  const entries = readdirSync(source).sort();
-  for (const name of entries) {
-    const from = join(source, name);
-    const to = join(target, name);
-    const link = lstatSync(from);
-    if (link.isSymbolicLink()) {
-      fail(`refused to copy symbolic link ${from}; the entry must be plain files only`);
+  mkdirSync(dst, { recursive: true });
+  const names = readdirSync(src).sort();
+  for (const name of names) {
+    const from = join(src, name);
+    const to = join(dst, name);
+    const st = lstatSync(from);
+    if (st.isSymbolicLink()) {
+      fail(`symbolic link not allowed: ${from}`);
     }
-    if (link.isDirectory()) {
-      const sub = copyTree(from, to);
-      files += sub.files;
-      bytes += sub.bytes;
-    } else if (link.isFile()) {
-      copyFileSync(from, to);
+    if (st.isDirectory()) {
+      files += copyTree(from, to);
+    } else if (st.isFile()) {
+      writeFileSync(to, readFileSync(from));
       files += 1;
-      bytes += link.size;
     } else {
-      fail(`refused to copy special file ${from}; the entry must be plain files only`);
+      fail(`special file not allowed: ${from}`);
     }
   }
-  return { files, bytes };
+  return files;
 }
 
-// Check both sources before writing anything, so a missing folder fails
-// with a clear error instead of leaving a partial output behind.
-requireDirectory(appSource, 'app');
-requireDirectory(shotsSource, 'screenshots');
+function main(): void {
+  const appDir = join(REPO_ROOT, APP_NAME);
+  const shotsDir = join(REPO_ROOT, SHOTS_NAME);
 
-const appIndex = join(appSource, 'index.html');
-if (!existsSync(appIndex) || !statSync(appIndex).isFile()) {
-  fail(`missing app/index.html: ${appIndex} is not a file; nothing was written`);
-}
+  checkInputs(appDir, shotsDir);
 
-// The trophy data is the heart of the entry: refuse to hand in a guide
-// without it, rather than letting the scorer be the first to notice.
-const trophyData = join(appSource, 'data', 'trophies.json');
-if (!existsSync(trophyData) || !statSync(trophyData).isFile()) {
-  fail(`missing app/data/trophies.json: ${trophyData} is not a file; nothing was written`);
-}
+  // Create the output directory when it is missing, but never remove it:
+  // on the grader it is a mounted volume.
+  mkdirSync(OUTPUT_DIR, { recursive: true });
+  clearOwned(OUTPUT_DIR);
 
-// The gate takes 3 or 4 screenshots and no other count. Check the count
-// here, where the message can say what to fix, instead of handing the
-// scorer an entry it must refuse.
-const shotFiles = readdirSync(shotsSource)
-  .filter((name) => !name.startsWith('.'))
-  .filter((name) => statSync(join(shotsSource, name)).isFile());
-if (shotFiles.length < 3 || shotFiles.length > 4) {
-  fail(
-    `screenshots/ holds ${shotFiles.length} file(s) (${shotFiles.join(', ') || 'none'}); ` +
-      `the entry needs 3 or 4 screenshots; nothing was written`,
+  const appFiles = copyTree(appDir, join(OUTPUT_DIR, APP_NAME));
+  const shotFiles = copyTree(shotsDir, join(OUTPUT_DIR, SHOTS_NAME));
+
+  const dossier = buildDossier(OUTPUT_DIR, {
+    text_max_bytes: TEXT_MAX_BYTES,
+    screenshots: { max: SHOTS_MAX, max_bytes: SHOT_MAX_BYTES },
+    app_max_files: APP_MAX_FILES,
+    app_max_bytes: APP_MAX_BYTES,
+    app_path_max_bytes: APP_PATH_MAX_BYTES,
+  });
+  writeFileSync(join(OUTPUT_DIR, DOSSIER_NAME), dossier);
+
+  console.log(
+    `main.ts: wrote ${appFiles} app files and ${shotFiles} screenshots to ${OUTPUT_DIR}, dossier.json ${dossier.length} bytes`,
   );
 }
 
-// Start from a clean output directory so stale files from an earlier run
-// can never leak into this entry.
-rmSync(outputDir, { recursive: true, force: true });
-mkdirSync(outputDir, { recursive: true });
-
-const appCopied = copyTree(appSource, join(outputDir, 'app'));
-const shotsCopied = copyTree(shotsSource, join(outputDir, 'screenshots'));
-
-// The scorer's own caps: the dossier text is capped at 160 KiB, at most 4
-// screenshots of at most 256 KiB each, app/ at most 993 files and
-// directories and 48 MiB in all. buildDossier refuses anything past them.
-const dossier = buildDossier(outputDir, {
-  text_max_bytes: 163840,
-  screenshots: { max: 4, max_bytes: 262144 },
-  app_max_files: 993,
-  app_max_bytes: 50331648,
-});
-writeFileSync(join(outputDir, 'dossier.json'), dossier);
-
-console.log(
-  `wrote ${outputDir}: app/ (${appCopied.files} files, ${appCopied.bytes} bytes), ` +
-    `screenshots/ (${shotsCopied.files} files, ${shotsCopied.bytes} bytes), ` +
-    `dossier.json (${dossier.length} bytes)`,
-);
+main();
