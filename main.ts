@@ -1,36 +1,138 @@
-// A working gta6-trophy-guide-01 entry (Node 22, standard library only): the guide is this directory's app/ folder,
-// plain static files a browser opens at app/index.html (ES modules, CSS, no build step), offline: it loads nothing
-// over the network, and its trophy list and guides are app/data/trophies.json. The program hands it in: it copies app/
-// and screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the judge reads (your
-// screenshots, the first load's files and bytes, and your source), with the vendored make.fun library. Leave
-// vendor/makefun-frontend.ts as it is: the scorer requires dossier.json to be byte for byte what its own copy writes.
+// Leonida Trophy Guide — entry program (gta6-trophy-guide-01).
 //
-// Only the plumbing, not a winner: a plain checklist of the 55 trophies with a one-line hint each. Write a real guide
-// for every trophy in your own words, a roadmap to the platinum, filters and a spoiler setting in app/, put 3 or 4 PNG
-// or JPEG screenshots of it in screenshots/ (the first by name is the cover; shots.json says which views this
-// starter's were taken of), and run it.
+// Copies this repository's app/ and screenshots/ into the output directory
+// and writes output/dossier.json, the summary the judge reads, using the
+// vendored make.fun frontend library. The guide itself is plain static
+// files under app/ (index.html, style.css, app.js, data/*.json); it opens
+// in a desktop browser and works with the network off.
 //
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// Run it from the repository root:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+// In the grader's container MAKEFUN_OUTPUT_DIR is unset and the output
+// directory is /output.
+//
+// Only the Node standard library is used, plus vendor/makefun-frontend.ts,
+// which must stay exactly as the kit shipped it: the scorer rebuilds the
+// dossier with its own copy and requires byte-for-byte equality.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-frontend.ts';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+// The repository root is the directory holding this file.
+const repoRoot = resolve(fileURLToPath(new URL('.', import.meta.url)));
+const outputDir = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'app'), join(out, 'app'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+const appSource = join(repoRoot, 'app');
+const shotsSource = join(repoRoot, 'screenshots');
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files and directories in app/ or
-// 48 MiB of app files: app/ counts beside /output's own 1000-entry cap, its screenshots/ and dossier.json).
-writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, { text_max_bytes: 163840, screenshots: { max: 4, max_bytes: 262144 }, app_max_files: 993, app_max_bytes: 50331648 }),
+function fail(message: string): never {
+  throw new Error(`main.ts: ${message}`);
+}
+
+function requireDirectory(path: string, label: string): void {
+  let info;
+  try {
+    info = statSync(path);
+  } catch {
+    fail(`missing ${label} directory: ${path} does not exist; nothing was written`);
+  }
+  if (!info.isDirectory()) {
+    fail(`${label} is not a directory: ${path}; nothing was written`);
+  }
+}
+
+// Copy one directory tree into another, entry by entry in sorted order so
+// the run is deterministic. Symbolic links and other special files are
+// refused: the entry must be plain files and directories only.
+function copyTree(source: string, target: string): { files: number; bytes: number } {
+  let files = 0;
+  let bytes = 0;
+  mkdirSync(target, { recursive: true });
+  const entries = readdirSync(source).sort();
+  for (const name of entries) {
+    const from = join(source, name);
+    const to = join(target, name);
+    const link = lstatSync(from);
+    if (link.isSymbolicLink()) {
+      fail(`refused to copy symbolic link ${from}; the entry must be plain files only`);
+    }
+    if (link.isDirectory()) {
+      const sub = copyTree(from, to);
+      files += sub.files;
+      bytes += sub.bytes;
+    } else if (link.isFile()) {
+      copyFileSync(from, to);
+      files += 1;
+      bytes += link.size;
+    } else {
+      fail(`refused to copy special file ${from}; the entry must be plain files only`);
+    }
+  }
+  return { files, bytes };
+}
+
+// Check both sources before writing anything, so a missing folder fails
+// with a clear error instead of leaving a partial output behind.
+requireDirectory(appSource, 'app');
+requireDirectory(shotsSource, 'screenshots');
+
+const appIndex = join(appSource, 'index.html');
+if (!existsSync(appIndex) || !statSync(appIndex).isFile()) {
+  fail(`missing app/index.html: ${appIndex} is not a file; nothing was written`);
+}
+
+// The trophy data is the heart of the entry: refuse to hand in a guide
+// without it, rather than letting the scorer be the first to notice.
+const trophyData = join(appSource, 'data', 'trophies.json');
+if (!existsSync(trophyData) || !statSync(trophyData).isFile()) {
+  fail(`missing app/data/trophies.json: ${trophyData} is not a file; nothing was written`);
+}
+
+// The gate takes 3 or 4 screenshots and no other count. Check the count
+// here, where the message can say what to fix, instead of handing the
+// scorer an entry it must refuse.
+const shotFiles = readdirSync(shotsSource)
+  .filter((name) => !name.startsWith('.'))
+  .filter((name) => statSync(join(shotsSource, name)).isFile());
+if (shotFiles.length < 3 || shotFiles.length > 4) {
+  fail(
+    `screenshots/ holds ${shotFiles.length} file(s) (${shotFiles.join(', ') || 'none'}); ` +
+      `the entry needs 3 or 4 screenshots; nothing was written`,
+  );
+}
+
+// Start from a clean output directory so stale files from an earlier run
+// can never leak into this entry.
+rmSync(outputDir, { recursive: true, force: true });
+mkdirSync(outputDir, { recursive: true });
+
+const appCopied = copyTree(appSource, join(outputDir, 'app'));
+const shotsCopied = copyTree(shotsSource, join(outputDir, 'screenshots'));
+
+// The scorer's own caps: the dossier text is capped at 160 KiB, at most 4
+// screenshots of at most 256 KiB each, app/ at most 993 files and
+// directories and 48 MiB in all. buildDossier refuses anything past them.
+const dossier = buildDossier(outputDir, {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  app_max_files: 993,
+  app_max_bytes: 50331648,
+});
+writeFileSync(join(outputDir, 'dossier.json'), dossier);
+
+console.log(
+  `wrote ${outputDir}: app/ (${appCopied.files} files, ${appCopied.bytes} bytes), ` +
+    `screenshots/ (${shotsCopied.files} files, ${shotsCopied.bytes} bytes), ` +
+    `dossier.json (${dossier.length} bytes)`,
 );
